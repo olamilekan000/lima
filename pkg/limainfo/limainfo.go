@@ -7,13 +7,17 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"path/filepath"
+	"runtime"
 
 	"github.com/sirupsen/logrus"
 
 	"github.com/lima-vm/lima/v2/pkg/envutil"
 	"github.com/lima-vm/lima/v2/pkg/limatype"
 	"github.com/lima-vm/lima/v2/pkg/limatype/dirnames"
+	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
 	"github.com/lima-vm/lima/v2/pkg/limayaml"
+	"github.com/lima-vm/lima/v2/pkg/plugin"
 	"github.com/lima-vm/lima/v2/pkg/registry"
 	"github.com/lima-vm/lima/v2/pkg/templatestore"
 	"github.com/lima-vm/lima/v2/pkg/usrlocalsharelima"
@@ -29,6 +33,10 @@ type LimaInfo struct {
 	VMTypesEx       map[string]DriverExt         `json:"vmTypesEx"`   // since Lima v2.0.0
 	GuestAgents     map[limatype.Arch]GuestAgent `json:"guestAgents"` // since Lima v1.1.0
 	ShellEnvBlock   []string                     `json:"shellEnvBlock"`
+	HostOS          string                       `json:"hostOS"`       // since Lima v2.0.0
+	HostArch        string                       `json:"hostArch"`     // since Lima v2.0.0
+	IdentityFile    string                       `json:"identityFile"` // since Lima v2.0.0
+	Plugins         []plugin.Plugin              `json:"plugins"`      // since Lima v2.0.0
 }
 
 type DriverExt struct {
@@ -72,6 +80,8 @@ func New(ctx context.Context) (*LimaInfo, error) {
 		VMTypesEx:       vmTypesEx,
 		GuestAgents:     make(map[limatype.Arch]GuestAgent),
 		ShellEnvBlock:   envutil.GetDefaultBlockList(),
+		HostOS:          runtime.GOOS,
+		HostArch:        limatype.NewArch(runtime.GOARCH),
 	}
 	info.Templates, err = templatestore.Templates()
 	if err != nil {
@@ -81,6 +91,11 @@ func New(ctx context.Context) (*LimaInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	configDir, err := dirnames.LimaConfigDir()
+	if err != nil {
+		return nil, err
+	}
+	info.IdentityFile = filepath.Join(configDir, filenames.UserPrivateKey)
 	for _, arch := range limatype.ArchTypes {
 		bin, err := usrlocalsharelima.GuestAgentBinary(limatype.LINUX, arch)
 		if err != nil {
@@ -95,5 +110,15 @@ func New(ctx context.Context) (*LimaInfo, error) {
 			Location: bin,
 		}
 	}
+
+	plugins, err := plugin.DiscoverPlugins()
+	if err != nil {
+		logrus.WithError(err).Debug("Failed to discover plugins")
+		// Don't fail the entire info command if plugin discovery fails
+		info.Plugins = []plugin.Plugin{}
+	} else {
+		info.Plugins = plugins
+	}
+
 	return info, nil
 }
